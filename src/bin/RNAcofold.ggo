@@ -1,0 +1,353 @@
+# Name of your program
+package "RNAcofold" # don't use package if you're using automake
+
+purpose "calculate secondary structures of two RNAs with dimerization"
+
+#usage "RNAcofold [options]\n"
+# Version of your program
+#version "2.0"   # don't use version if you're using automake
+
+
+# command line options passed to gengetopt
+args "--file-name=RNAcofold_cmdl --include-getopt --default-optional --func-name=RNAcofold_cmdline_parser --arg-struct-name=RNAcofold_args_info"
+
+
+description "The program works much like RNAfold, but allows one to specify two RNA sequences which are\
+ then allowed to form a dimer structure. RNA sequences are read from stdin in the usual\
+ format, i.e. each line of input corresponds to one sequence, except for lines starting\
+ with \">\" which contain the name of the next sequence.\nTo compute the hybrid structure\
+ of two molecules, the two sequences must be concatenated using the \'&\' character as\
+ separator.\nRNAcofold can compute minimum free energy (mfe) structures, as well as\
+ partition function (pf) and base pairing probability matrix (using the -p switch)\nSince\
+ dimer formation is concentration dependent, RNAcofold can be used to compute equilibrium\
+ concentrations for all five monomer and (homo/hetero)-dimer species, given input\
+ concentrations for the monomers.\nOutput consists of the mfe structure in bracket\
+ notation as well as PostScript structure plots and \"dot plot\" files containing the\
+ pair probabilities, see the RNAfold man page for details. In the dot plots a cross marks\
+ the chain break between the two concatenated sequences.\nThe program will continue to\
+ read new sequences until a line consisting of the single character @ or an end of file\
+ condition is encountered.\n\n"
+
+# Options
+section "General Options"
+sectiondesc="Command line options which alter the general behavior of this program\n\n"
+
+option  "noPS"  -
+"Do not produce postscript drawing of the mfe structure.\n\n"
+flag
+off
+
+option  "noconv"  -
+"Do not automatically substitute nucleotide \"T\" with \"U\"\n\n"
+flag
+off
+
+option  "auto-id"  -
+"Automatically generate an ID for each sequence.\n"
+details="The default mode of RNAcofold is to automatically determine an ID from the input sequence\
+ data if the input file format allows to do that. Sequence IDs are usually given in the FASTA\
+ header of input sequences. If this flag is active, RNAcofold ignores any IDs retrieved from the\
+ input and automatically generates an ID for each sequence. This ID consists of a prefix and an\
+ increasing number. This flag can also be used to add a FASTA header to the output even if\
+ the input has none.\n\n"
+flag
+off
+
+option  "id-prefix" -
+"Prefix for automatically generated IDs (as used in output file names)\n\n"
+details="If this parameter is set, each sequence will be prefixed with the\
+ provided string. Hence, the output files will obey the following naming\
+ scheme: \"prefix_xxxx_ss.ps\" (secondary structure plot), \"prefix_xxxx_dp.ps\"\
+ (dot-plot), \"prefix_xxxx_dp2.ps\" (stack probabilities), etc. where xxxx\
+ is the sequence number. Note: Setting this parameter implies --auto-id.\n\n"
+string
+typestr="prefix"
+default="sequence"
+optional
+
+option  "id-delim" -
+"Change the delimiter between prefix and increasing number for automatically generated IDs (as used in output file names)\n\n"
+details="This parameter can be used to change the default delimiter \"_\" between
+ the prefix string and the increasing number for automatically generated ID.\n\n"
+string
+typestr="delimiter"
+default="_"
+optional
+hidden
+
+option  "id-digits"  -
+"Specify the number of digits of the counter in automatically generated alignment IDs.\n"
+details="When alignments IDs are automatically generated, they receive an increasing number, starting\
+ with 1. This number will always be left-padded by leading zeros, such that the number takes up a\
+ certain width. Using this parameter, the width can be specified to the users need. We allow\
+ numbers in the range [1:18]. This option implies --auto-id.\n\n"
+int
+default="4"
+optional
+hidden
+
+option  "id-start"  -
+"Specify the first number in automatically generated alignment IDs.\n"
+details="When sequence IDs are automatically generated, they receive an increasing number,\
+ usually starting with 1. Using this parameter, the first number can be specified to the users\
+ requirements. Note: negative numbers are not allowed.\nNote: Setting this parameter implies\
+ to ignore any IDs retrieved from the input data, i.e. it activates the --auto-id flag.\n\n"
+long
+default="1"
+optional
+hidden
+
+option  "filename-delim" -
+"Change the delimiting character that is used for sanitized filenames\n\n"
+details="This parameter can be used to change the delimiting character used while\
+ sanitizing filenames, i.e. replacing invalid characters. Note, that the default\
+ delimiter ALWAYS is the first character of the \"ID delimiter\" as supplied through\
+ the --id-delim option. If the delimiter is a whitespace character or empty, invalid\
+ characters will be simply removed rather than substituted.\
+ Currently, we regard the following characters as illegal for use in filenames:\
+ backslash '\', slash '/', question mark '?', percent sign '%', asterisk '*', colon ':',\
+ pipe symbol '|', double quote '\"', triangular brackets '<' and '>'.\n\n"
+string
+typestr="delimiter"
+default="ID-delimiter"
+optional
+hidden
+
+option  "filename-full" -
+"Use full FASTA header to create filenames\n\n"
+details="This parameter can be used to deactivate the default behavior of limiting\
+ output filenames to the first word of the sequence ID. Consider the following example:\
+ An input with FASTA header \">NM_0001 Homo Sapiens some gene\" usually produces output\
+ files with the prefix \"NM_0001\" without the additional data available in the FASTA\
+ header, e.g. \"NM_0001_ss.ps\" for secondary structure plots. With this flag set, no\
+ truncation of the output filenames is done, i.e. output filenames receive the full\
+ FASTA header data as prefixes. Note, however, that invalid characters (such as whitespace)\
+ will be substituted by a delimiting character or simply removed, (see also the parameter\
+ option --filename-delim).\n\n"
+flag
+off
+hidden
+
+
+# Options
+section "Structure Constraints"
+sectiondesc="Command line options to interact with the structure constraints feature of this program\n\n"
+
+option  "maxBPspan" -
+"Set the maximum base pair span\n\n"
+int
+default="-1"
+optional
+
+option  "constraint"  C
+"Calculate structures subject to constraints.\n"
+details="The program reads first the\
+ sequence, then a string containing constraints on the structure encoded with the symbols:\n\n. (no constraint\
+ for this base)\n\n| (the corresponding base has to be paired\n\nx (the base is unpaired)\n\n< (base i is paired with\
+ a base j>i)\n\n> (base i is paired with a base j<i)\n\nand matching brackets ( ) (base i pairs base j)\n\nWith the\
+ exception of \"|\", constraints will disallow all pairs conflicting with the constraint. This is usually\
+ sufficient to enforce the constraint, but occasionally a base may stay unpaired in spite of constraints. PF\
+ folding ignores constraints of type \"|\".\n\n"
+string
+typestr="<filename>"
+default = ""
+argoptional
+
+option  "batch"   -
+"Use constraints for multiple sequences.\n"
+details="Usually, constraints provided from input file only apply to a single input sequence. Therefore,\
+ RNAfold will stop its computation and quit after the first input sequence was processed. Using this\
+ switch, RNAfold processes multiple input sequences and applies the same provided constraints to each of them.\n\n"
+flag
+off
+dependon="constraint"
+
+option  "canonicalBPonly" -
+"Remove non-canonical base pairs from the structure constraint\n\n"
+flag
+off
+dependon="constraint"
+
+option  "enforceConstraint" -
+"Enforce base pairs given by round brackets ( ) in structure constraint\n\n"
+flag
+off
+dependon="constraint"
+
+option  "commands"   -
+"Read additional commands from file\n"
+details="Commands include hard and soft constraints, but also structure motifs in hairpin and interior\
+ loops that need to be treeted differently. Furthermore, commands can be set for unstructured and structured\
+ domains.\n\n"
+string
+typestr="<filename>"
+optional
+hidden
+
+
+section "Algorithms"
+sectiondesc="Select additional algorithms which should be included in the calculations.\nThe Minimum free energy\
+ (MFE) and a structure representative are calculated in any case.\n\n"
+
+option  "partfunc"  p
+"Calculate the partition function and base pairing probability matrix in\
+ addition to the mfe structure. Default is calculation of mfe structure only.\n"
+details="In addition to the MFE structure\
+ we print a coarse representation of the pair probabilities in form of a pseudo bracket notation, followed by\
+ the ensemble free energy, as well as the centroid structure derived from the pair probabilities together with\
+ its free energy and distance to the ensemble. Finally it prints the frequency of the mfe structure, and the\
+ structural diversity (mean distance between the structures in the ensemble).\nSee the description of pf_fold()\
+ and mean_bp_dist() and centroid() in the RNAlib documentation for details.\nNote that unless you also specify\
+ -d2 or -d0, the partition function and mfe calculations will use a slightly different energy model. See the\
+ discussion of dangling end options below.\n\nAn additionally passed value to this option changes the behavior\
+ of partition function calculation:\n\n\
+ In order to calculate the partition function but not the pair probabilities use the -p0 option and save about
+ 50% in runtime. This prints the ensemble free energy -kT ln(Z).\n\n"
+int
+default="1"
+argoptional
+optional
+
+option "all_pf" a
+"Compute the partition function and free energies not only of the hetero-dimer consisting\
+ of the two input sequences (the \"AB dimer\"), but also of the homo-dimers AA and BB as\
+ well as A and B monomers.\n"
+details="The output will contain the free energies for each of these species, as well as\
+ 5 dot plots containing the conditional pair probabilities, called \"ABname5.ps\", \"AAname5.ps\"\
+ and so on. For later use, these dot plot files also contain the free energy of the\
+ ensemble as a comment. Using -a automatically switches on the -p option.\
+ Base pair probability computations may be turned off altogether by providing \"0\" as\
+ an argument to this parameter. In that case, no dot plot files will be generated.\n\n"
+int
+default="1"
+argoptional
+optional
+
+
+option  "concentrations"  c
+"In addition to everything listed under the -a option, read in initial monomer concentrations\
+ and compute the expected equilibrium concentrations of the 5 possible species (AB, AA, BB, A, B).\n"
+details="Start concentrations are read from stdin (unless the -f option is used) in [mol/l],\
+ equilibrium concentrations are given realtive to the sum of the two inputs. An arbitrary number\
+ of initial concentrations can be specified (one pair of concentrations per line).\n\n"
+flag
+off
+
+option  "concfile"  f
+"Specify a file with initial concentrations for the two sequences."
+details="The table consits of arbitrary many lines with just two numbers (the concentration of\
+ sequence A and B). This option will automatically toggle the -c (and thus -a and -p) options (see above).\n\n"
+string
+typestr="filename"
+optional
+
+option  "pfScale" S
+"In the calculation of the pf use scale*mfe as an estimate for the ensemble free energy (used to avoid\
+ overflows).\n"
+details="The default is 1.07, useful values are 1.0 to 1.2. Occasionally needed\
+ for long sequences.\nYou can also recompile the program to use double precision (see the README file).\n\n"
+double
+typestr="scaling factor"
+optional
+hidden
+
+option  "bppmThreshold" -
+"Set the threshold for base pair probabilities included in the postscript output\n"
+details="By setting the threshold the base pair probabilities that are included in the\
+ output can be varied. By default only those exceeding 1e-5 in probability will be shown as squares\
+ in the dot plot. Changing the threshold to any other value allows for increase or decrease of data.\n\n"
+double
+typestr="<value>"
+optional
+default="1e-5"
+hidden
+
+option  "gquad" g
+"Incoorporate G-Quadruplex formation into the structure prediction algorithm.\n\n"
+flag
+off
+
+section "Model Details"
+
+option  "temp"  T
+"Rescale energy parameters to a temperature of temp C. Default is 37C.\n\n"
+double
+optional
+
+option  "noTetra" 4
+"Do not include special tabulated stabilizing energies for tri-, tetra- and hexaloop hairpins.\n\n"
+details="Mostly for testing.\n\n"
+flag
+off
+
+option  "dangles" d
+"How to treat \"dangling end\" energies for bases adjacent to helices in free ends and multi-loops\n"
+details="\nWith -d1 only unpaired bases can participate in at most one dangling end, this is the\
+ default for mfe folding but unsupported for the partition function folding.\n\nWith -d2 this check is ignored,\
+ dangling energies will be added for the bases adjacent to a helix on both sides in any case; this is the\
+ default for partition function folding (-p).\nThe option -d0 ignores dangling ends altogether (mostly for\
+ debugging).\nWith -d3 mfe folding will allow coaxial stacking of adjacent helices in multi-loops. At the\
+ moment the implementation will not allow coaxial stacking of the two interior pairs in a loop of degree 3\
+ and works only for mfe folding.\n\nNote that by default (as well as with -d1 and -d3) pf and mfe folding\
+ treat dangling ends differently. Use -d2 in addition to -p to ensure that both algorithms use the same\
+ energy model.\n\n"
+int
+default="2"
+optional
+
+option  "noLP"  -
+"Produce structures without lonely pairs (helices of length 1).\n"
+details="For partition function folding this only disallows pairs that can only occur isolated. Other\
+ pairs may still occasionally occur as helices of length 1.\n\n"
+flag
+off
+
+option  "noGU"  -
+"Do not allow GU pairs\n\n"
+flag
+off
+
+option  "noClosingGU" -
+"Do not allow GU pairs at the end of helices\n\n"
+flag
+off
+
+option  "paramFile" P
+"Read energy parameters from paramfile, instead of using the default parameter set.\n"
+details="A sample parameter file should accompany your distribution.\nSee the RNAlib\
+ documentation for details on the file format.\n\n"
+string
+typestr="paramfile"
+optional
+
+option  "nsp" -
+"Allow other pairs in addition to the usual AU,GC,and GU pairs.\n"
+details="Its argument is a comma separated list of additionally allowed pairs. If the\
+ first character is a \"-\" then AB will imply that AB and BA are allowed pairs.\ne.g.\
+ RNAfold -nsp -GA  will allow GA and AG pairs. Nonstandard pairs are given 0 stacking\
+ energy.\n\n"
+string
+optional
+hidden
+
+option  "energyModel" e
+"Rarely used option to fold sequences from the artificial ABCD... alphabet, where\
+ A pairs B, C-D etc.  Use the energy parameters for GC (-e 1) or AU (-e 2) pairs.\n\n"
+int
+optional
+hidden
+
+option  "betaScale" -
+"Set the scaling of the Boltzmann factors\n"
+details="The argument provided with this option enables to scale the thermodynamic temperature\
+ used in the Boltzmann factors independently from the temperature used to scale the individual\
+ energy contributions of the loop types. The Boltzmann factors then become exp(-dG/(kT*betaScale))\
+ where k is the Boltzmann constant, dG the free energy contribution of the state and T the\
+ absolute temperature.\n\n"
+double
+default="1."
+optional
+hidden
+
+text    "\nIf in doubt our program is right, nature is at fault.\nComments should be sent to\
+ rna@tbi.univie.ac.at.\n\n"

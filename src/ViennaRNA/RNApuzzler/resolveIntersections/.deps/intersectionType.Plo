@@ -1,0 +1,8 @@
+RNApuzzler/resolveIntersections/intersectionType.lo: \
+ RNApuzzler/resolveIntersections/intersectionType.c \
+ /usr/include/stdc-predef.h \
+ ../../src/ViennaRNA/RNApuzzler/resolveIntersections/intersectionType.h
+
+/usr/include/stdc-predef.h:
+
+../../src/ViennaRNA/RNApuzzler/resolveIntersections/intersectionType.h:

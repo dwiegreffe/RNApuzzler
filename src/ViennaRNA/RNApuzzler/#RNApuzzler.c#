@@ -1,0 +1,695 @@
+#include "ViennaRNA/RNApuzzler/RNApuzzler.h"
+#include "ViennaRNA/RNApuzzler/RNAturtle.h"
+#include "ViennaRNA/RNApuzzler/vector_math.h"
+#include "ViennaRNA/RNApuzzler/definitions.h"
+#include "ViennaRNA/RNApuzzler/data/cfg_reader.h"
+#include "ViennaRNA/RNApuzzler/data/configtree.h"
+#include "ViennaRNA/RNApuzzler/data/boundingBoxes.h"
+#include "ViennaRNA/RNApuzzler/intersectLevel/intersectLevelLines.h"
+#include "ViennaRNA/RNApuzzler/intersectLevel/intersectLevelTreeNodes.h"
+#include "ViennaRNA/RNApuzzler/resolveIntersections/resolveIntersections.h"
+
+#include "ViennaRNA/RNApuzzler/output/output.h"
+
+#include "ViennaRNA/RNApuzzler/output/GeoGebra_output.h"
+#include "ViennaRNA/RNApuzzler/output/configtree_debug.h"
+
+#include "ViennaRNA/utils.h"
+
+#include <stdlib.h>
+#include <math.h>
+
+#define printInitialConfig 0
+
+//--------------------------------------------------------------------------------------------------------------------------
+
+void getSimpleBoundingBox(treeNode* node, double* const bounds, const int recursionDepth) {
+    double loopMin = node->lBox->c[0] - node->lBox->r;
+    double loopMax = node->lBox->c[0] + node->lBox->r;
+    if (recursionDepth == 0) {
+        bounds[0] = loopMin;
+        bounds[1] = loopMax;
+    }
+
+    for (int i = 0; i < node->childCount; i++) {
+        treeNode* child = getChild(node, i);
+        getSimpleBoundingBox(child, bounds, recursionDepth + 1);
+    }
+
+    if (loopMin < bounds[0]) { bounds[0] = loopMin; }
+    if (loopMax > bounds[1]) { bounds[1] = loopMax; }
+
+    for (int i = 0; i < node->sBox->bulgeCount; i++) {
+        double pPrev[2];
+        double pThis[2];
+        double pNext[2];
+        getBulgeCoordinates(node->sBox, i, pPrev, pThis, pNext);
+
+        if (pThis[0] < bounds[0]) { bounds[0] = pThis[0]; }
+        if (pThis[0] > bounds[1]) { bounds[1] = pThis[0]; }
+    }
+}
+
+void optimizeExterior(
+        treeNode* exteriorNode,
+        short const * const pair_table,
+        double* const distances,
+        double* const affin,
+        const double unpaired,
+        const short allowFlipping
+) {
+    int stemCount = exteriorNode->childCount;
+
+    if (stemCount < 2) {
+        return;
+    }
+
+    treeNode** node = (treeNode**) vrna_alloc(stemCount * sizeof(treeNode*));
+    for (int stem = 0; stem < stemCount; stem++) {
+        node[stem] = getChild(exteriorNode, stem);
+    }
+
+    double** bounds = (double**) vrna_alloc(stemCount * sizeof(double*));
+    for (int stem = 0; stem < stemCount; stem++) {
+        bounds[stem] = (double*) vrna_alloc(2 * sizeof(double));
+        bounds[stem][0] = 0.0;
+        bounds[stem][1] = 0.0;
+    }
+    getSimpleBoundingBox(node[0], bounds[0], 0);
+
+    int* i = (int*) vrna_alloc(stemCount * sizeof(int));
+    int* backbone = (int*) vrna_alloc(stemCount * sizeof(int));
+    for (int stem = 0; stem < stemCount; stem++) {
+        backbone[stem] = 0;
+    }
+    int stem = 0;
+    int base = 1;
+    while (base < pair_table[0] && stem < stemCount) {
+        if (pair_table[base] > base) {
+            i[stem] = base;
+            stem++;
+            base = pair_table[base];
+        } else {
+            base++;
+            backbone[stem]++;
+        }
+    }
+
+    int* upper = (int*) vrna_alloc((stemCount + 1) * sizeof(int));
+    int* lower = (int*) vrna_alloc((stemCount + 1) * sizeof(int));
+    upper[0] = 0;
+    lower[0] = 0;
+
+    /// set first stem to upper side
+    upper[0]++;
+    upper[upper[0]] = 0;
+
+    double offset = 0.0;
+
+    // processing start
+    for (int stem = 1; stem < stemCount; stem++) {
+        // initial setting
+        if (offset > 0.0) {
+            double translate[2] = { offset, 0.0 };
+            translateBoundingBoxes(node[stem], translate);
+        }
+        getSimpleBoundingBox(node[stem], bounds[stem], 0);
+
+        short changed = 1;
+        while (changed) {
+            changed = 0;
+
+            // get overlap with upper and lower side
+            double upperOverlap = 0.0;
+            for (int u = 1; u <= upper[0]; u++) {
+                int upperStem = upper[u];
+                double boundsOverlap = (bounds[upperStem][1] + unpaired) - bounds[stem][0];
+                if (boundsOverlap > upperOverlap && intersectTrees(node[stem], node[upperStem])) {
+                    upperOverlap = boundsOverlap;
+                }
+                //printf("%d vs %d: upperOverlap:%f (boundsOverlap:%f)\n", stem, upperStem, upperOverlap, boundsOverlap);
+            }
+            double lowerOverlap = 0.0;
+            for (int l = 1; l <= lower[0]; l++) {
+                int lowerStem = lower[l];
+                double boundsOverlap = (bounds[lowerStem][1] + unpaired) - bounds[stem][0];
+                if (boundsOverlap > lowerOverlap && intersectTrees(node[stem], node[lowerStem])) {
+                    lowerOverlap = boundsOverlap;
+                }
+                //printf("%d vs %d: lowerOverlap:%f (boundsOverlap:%f)\n", stem, lowerStem, lowerOverlap, boundsOverlap);
+            }
+
+            // fix minimum of both overlaps
+            double minOverlap = (allowFlipping && (lowerOverlap < upperOverlap)) ? lowerOverlap : upperOverlap;
+            if (minOverlap > 0.0) {
+                double deltaPerDistance = minOverlap / backbone[stem];
+                for (int base = pair_table[i[stem-1]]; base < i[stem]; base++) {
+                    distances[base] += deltaPerDistance;
+                }
+
+                double translate[2] = { minOverlap, 0.0 };
+                translateBoundingBoxes(node[stem], translate);
+
+                bounds[stem][0] += minOverlap;
+                bounds[stem][1] += minOverlap;
+
+                offset += minOverlap;
+
+                changed = 1;
+            } else {
+                // flip if necessary
+                if (lowerOverlap < upperOverlap) {
+
+                    for (int base = i[stem] + 1; base <= pair_table[i[stem]] + 1; base++) {
+                        if (base > pair_table[0]) {
+                            break;
+                        }
+                        affin[base] *= -1;
+                    }
+
+                    lower[0]++;
+                    lower[lower[0]] = stem;
+                } else {
+                    upper[0]++;
+                    upper[upper[0]] = stem;
+                }
+            }
+        } // end while(changed)
+    }
+    // processing end
+
+    free(upper);
+    free(lower);
+    free(backbone);
+    free(i);
+    for (int stem = 0; stem < stemCount; stem++) {
+        free(bounds[stem]);
+    }
+    free(bounds);
+    free(node);
+}
+
+//--------------------------------------------------------------------------------------------------------------------------
+
+void calcArc(
+        const double center[2],
+        const double radius,
+        const short goClockwise,
+        const int i,
+        double * const x,
+        double * const y,
+        double *arcCoords
+) {
+
+    int from = i-1;
+    int to   = i;
+    double pFrom[2]   = { x[from],  y[from]  };
+    double pTo[2]     = { x[to],    y[to]    };
+    double pCenter[2] = { center[0], center[1] };
+
+    double vCenterFrom[2], vCenterTo[2];
+    vector(pCenter, pFrom, vCenterFrom);
+    vector(pCenter, pTo  , vCenterTo  );
+    double v_1_0[2] = { 1.0, 0.0 }; // zero degree axis
+
+    double angleFrom = toDegree(angleBetweenVectors2D(v_1_0, vCenterFrom));
+    double angleTo   = toDegree(angleBetweenVectors2D(v_1_0, vCenterTo));
+
+    if (pFrom[1] < pCenter[1]) {
+        angleFrom = 360.0 - angleFrom;
+    }
+    if (pTo[1] < pCenter[1]) {
+        angleTo = 360.0 - angleTo;
+    }
+
+    arcCoords[6*i + 0] = pCenter[0];
+    arcCoords[6*i + 1] = pCenter[1];
+    arcCoords[6*i + 2] = radius;
+    arcCoords[6*i + 3] = angleFrom;
+    arcCoords[6*i + 4] = angleTo;
+    arcCoords[6*i + 5] = goClockwise;
+}
+
+void calcArcsHandleStem(
+        int start,
+        short const * const pair_table,
+        double * const x,
+        double * const y,
+        const structure* structures,
+        double *arcCoords
+);
+
+void calcArcsHandleLoop(
+    int start,
+    short const * const pair_table,
+    double * const x,
+    double * const y,
+    const structure* structures,
+    double *arcCoords
+) {
+    int end = pair_table[start];
+
+    /// ---------------------------------------------------
+    /// count the number of points / bases on the loop
+    /// ---------------------------------------------------
+    int numPoints = 1;
+    int i = start + 1;
+    while (i < end) {
+        if (pair_table[i] == 0) {
+            i++;
+        } else
+        if (pair_table[i] > i) {
+            i = pair_table[i];
+        } else {
+            i++;
+        }
+        numPoints++;
+    }
+
+    /// ---------------------------------------------------
+    /// collect the list of all points / bases on the loop
+    /// ---------------------------------------------------
+    double** points = (double**) vrna_alloc(numPoints * sizeof(double*));
+    for (int k = 0; k < numPoints; k++) {
+        double* point = (double*) vrna_alloc(2 * sizeof(double));
+        points[k] = point;
+    }
+
+    int k = 0;
+    i = start + 1;
+    while (i < end) {
+        double* point = points[k];
+        point[0] = x[i - 1];
+        point[1] = y[i - 1];
+        k++;
+        if (pair_table[i] == 0) {
+            i++;
+        } else if (pair_table[i] > i) {
+            // ... and meanwhile handle all stems
+            calcArcsHandleStem(i, pair_table, x, y, structures, arcCoords);
+            i = pair_table[i];
+        } else {
+            i++;
+        }
+    }
+    double* point = points[k];
+    point[0] = x[i - 1];
+    point[1] = y[i - 1];
+
+    /// take the line from the loop's end to its start
+    /// and an arbitrary point other point at the loop
+    /// (we take the point which is the center value in the points list)
+    /// if the chosen point is to the right of the line
+    /// we can safely state the circle is traversed clockwise
+    /// (counter clockwise only happens if the drawing is
+    ///  allowed to flip neighboring exterior children)
+    short goClockwise = isToTheRightPointPoint(points[numPoints-1],
+                                               points[0],
+                                               points[numPoints / 2]);
+
+    double center[2];
+    double rad;
+    circle(points[0 * numPoints / 3], points[1 * numPoints / 3], points[2 * numPoints / 3], center, &rad);
+
+    // free points array as it is no longer needed
+    for (int k = 0; k < numPoints; k++) {
+        free(points[k]);
+    }
+    free(points);
+
+    /// ----------------------------------
+    /// finally calculate arcs
+    /// ----------------------------------
+    i = start + 1;
+    while (i < end) {
+        if (pair_table[i] == 0) {
+            calcArc(center, rad, goClockwise, i-1, x, y, arcCoords);
+            i++;
+        } else if (pair_table[i] > i) {
+            calcArc(center, rad, goClockwise, i-1, x, y, arcCoords);
+            i = pair_table[i];
+        } else {
+            i++;
+        }
+    }
+    calcArc(center, rad, goClockwise, end-1, x, y, arcCoords);
+}
+
+void calcArcsHandleStem(
+    int start,
+    short const * const pair_table,
+    double * const x,
+    double * const y,
+    const structure* structures,
+    double *arcCoords
+) {
+    int i = start;
+    config *cfg = structures[i].config;
+    while (cfg == NULL) {
+        i++;
+        cfg = structures[i].config;
+    }
+    calcArcsHandleLoop(i, pair_table, x, y, structures, arcCoords);
+}
+
+
+void computeAnglesAndCentersForPS(
+    short const * const pair_table,
+    double * const x,
+    double * const y,
+    const structure* structures,
+    double *arcCoords
+) {
+    int end = pair_table[0];
+
+    // initialize (again??)
+    for (int j = 0; j < end; j++) {
+        arcCoords[6*j+0] = -1.;
+        arcCoords[6*j+1] = -1.;
+        arcCoords[6*j+2] = -1.;
+        arcCoords[6*j+3] = -1.;
+        arcCoords[6*j+4] = -1.;
+        arcCoords[6*j+5] = -1.;
+    }
+
+    int i = 1;
+    while (i < end) {
+        if (pair_table[i] == 0) {
+            i++;
+        } else if (pair_table[i] > i) {
+            calcArcsHandleStem(i, pair_table, x, y, structures, arcCoords);
+            i = pair_table[i];
+        } else {
+            i++;
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------------------------------
+
+short checkRemainingIntersections(
+    double *x,
+    double *y,
+    double *arcCoords,
+    const short printDetails,
+    const structure* structures,
+    const int length
+) {
+    char *fnName = "checkRemainingIntersections";
+
+    if (printDetails) {
+        printf("\n\n--- checking for remaining intersections ---\n");
+    }
+
+    const short skipExterior = 0;
+
+    short intersect = 0;
+    double arc_i[6];
+    short i_is_arc = 0;
+    double arc_j[6];
+    short j_is_arc = 0;
+
+    for (int i = 3; i < length; i++) {
+        arc_i[0] = arcCoords[6*i+0];
+        arc_i[1] = arcCoords[6*i+1];
+        arc_i[2] = arcCoords[6*i+2];
+        arc_i[3] = arcCoords[6*i+3];
+        arc_i[4] = arcCoords[6*i+4];
+        arc_i[5] = arcCoords[6*i+5];
+
+        i_is_arc = (arc_i[0] != -1);
+        double i0[2] = { x[i-1], y[i-1] };
+        double i1[2] = { x[i-0], y[i-0] };
+
+        if (skipExterior
+            && ((i0[1] <= EXTERIOR_Y) || (i1[1] <= EXTERIOR_Y))) {
+//            printf("skip i:%3d\n", i);
+            continue;
+        }
+        short intersectIExterior = 0;
+        if (structures[i+0].exterior == 0 && structures[i+1].exterior == 0) {
+            if (i_is_arc) {
+                /// exterior line
+                double xmin = fmin(i0[0], i1[0]);
+                double xmax = fmax(i0[0], i1[0]);
+                double p1[2] = { xmin, EXTERIOR_Y };
+                double p2[2] = { xmax, EXTERIOR_Y };
+
+                intersectIExterior = intersectLineArc( p1, p2, arc_i);
+            } else {
+                intersectIExterior = ((i0[1] <= EXTERIOR_Y) != (i1[1] <= EXTERIOR_Y));
+            }
+        }
+        intersect = intersect || intersectIExterior;
+
+        for (int j = 1; j < i-1; j++) {
+//            if (j != 135 && j != 134) { continue; }
+
+//            if (print_details) { printf("------\n%d-%d vs. %d-%d\n", i-1, i, j-1, j); }
+
+            arc_j[0] = arcCoords[6*j+0];
+            arc_j[1] = arcCoords[6*j+1];
+            arc_j[2] = arcCoords[6*j+2];
+            arc_j[3] = arcCoords[6*j+3];
+            arc_j[4] = arcCoords[6*j+4];
+            arc_j[5] = arcCoords[6*j+5];
+            j_is_arc = (arc_j[0] != -1);
+            double j0[2] = { x[j-1], y[j-1] };
+            double j1[2] = { x[j-0], y[j-0] };
+
+            if (skipExterior && ((j0[1] <= EXTERIOR_Y) || (j1[1] <= EXTERIOR_Y))) {
+//                printf("skip i:%3d j:%3d\n", i, j);
+                continue;
+            }
+
+            short intersect_ij = 0;
+
+            if ( i_is_arc &&  j_is_arc) {
+                if (arc_i[0] == arc_j[0]
+                    && arc_i[1] == arc_j[1]
+                    && arc_i[2] == arc_j[2]) {
+                    /// two arcs of the same circle: no intersection
+                    intersect_ij = 0;
+                } else {
+                    intersect_ij = intersectArcArc(arc_i, arc_j);
+                    if (intersect_ij) {
+                        printf("A=(%3.2f, %3.2f)\nB=(%3.2f, %3.2f)\n", i0[0], i0[1], i1[0], i1[1]);
+                        printf("C=(%3.2f, %3.2f)\nD=(%3.2f, %3.2f)\n", j0[0], j0[1], j1[0], j1[1]);
+                        printf("[INFO] [%s: %s] (%d %d) (%12.8lf %12.8lf %12.8lf) -- (%12.8lf %12.8lf %12.8lf)\n",
+                                fnName,
+                                "ArcArc",
+                                i, j,
+                                arc_i[0], arc_i[1], arc_i[2],
+                                arc_j[0], arc_j[1], arc_j[2]
+                              );
+                    }
+                }
+            } else if (!i_is_arc &&  j_is_arc) {
+                intersect_ij = intersectLineArc( i0, i1, arc_j);
+                    if (intersect_ij) {
+                        printf("[INFO] [%s: %s] (%d %d)\n",
+                                fnName,
+                                "LineArc",
+                                i, j
+                              );
+                    }
+            } else if ( i_is_arc && !j_is_arc) {
+                intersect_ij = intersectLineArc( j0, j1, arc_i);
+                    if (intersect_ij) {
+                        printf("[INFO] [%s: %s] (%d %d)\n",
+                                fnName,
+                                "LineArc",
+                                i, j
+                              );
+                    }
+            } else if (!i_is_arc && !j_is_arc) {
+                intersect_ij = intersectLineSegments(i0, i1, j0, j1, NULL);
+                    if (intersect_ij) {
+                        printf("[INFO] [%s: %s] (%d %d)\n",
+                                fnName,
+                                "LineSegments",
+                                i, j
+                              );
+                    }
+            }
+
+            intersect = intersect || intersect_ij;
+        }
+    }
+
+    return intersect;
+}
+
+//--------------------------------------------------------------------------------------------------------------------------
+
+void DEPRECATED_compareConfigAngleAndChildAngle(
+        treeNode* node,
+        puzzlerOptions* puzzler
+) {
+
+    if (isExterior(node)) {
+        printf("[COMPARE] node: %c (exterior)\n", getNodeName(node));
+        PS_printTree(node, puzzler);
+    } else {
+        printf("[COMPARE] node: %c\n", getNodeName(node));
+        printf("[COMPARE]  i cfg           child         diff\n");
+        double cfg = 0.0;
+        for (int i = 0; i < node->childCount; i++) {
+            cfg += getArcAngle(node->cfg, i);
+            double cfgDegree = toDegree(cfg);
+            double childAngle = getChildAngleByIndex(node, i);
+            double diff = cfgDegree - childAngle;
+            printf("[COMPARE] %2d %12.8lf° %12.8lf° %+.8lf°\n", i, cfgDegree, childAngle, diff);
+        }
+        cfg += getArcAngle(node->cfg, node->childCount);
+        printf("[COMPARE] %2d %12.8lf° ------------- -------------\n", node->childCount, toDegree(cfg));
+    }
+
+    for (int i = 0; i < node->childCount; i++) {
+        DEPRECATED_compareConfigAngleAndChildAngle(getChild(node, i), puzzler);
+    }
+}
+
+int layout_const_puzzler(
+        short const * const pair_table,
+        float *x,
+        float *y,
+        double *arc_coords,
+        puzzlerOptions *puzzler
+) {
+  const char *fnName = "layout_const_puzzler";
+
+//    printf("[Puzzler Settings]\n");
+//    printf("exterior: %d\n", puzzler->checkExteriorIntersections);
+//    printf("ancestor: %d\n", puzzler->checkAncestorIntersections);
+//    printf("siblings: %d\n", puzzler->checkSiblingIntersections);
+//    printf("optimize: %d\n", puzzler->optimize);
+//    printf("\n");
+
+    if (puzzler->paired / puzzler->unpaired > 2.0) {
+        printWarning(fnName, "paired:unpaired > 2.0 -> layout might be destroyed!\n");
+    }
+
+    int length = pair_table[0];
+    //printf("RNA length: %d\n", length);
+
+    double* myX = (double*) vrna_alloc(length * sizeof(double));
+    double* myY = (double*) vrna_alloc(length * sizeof(double));
+
+    int* directions = (int*) vrna_alloc((length + 1) * sizeof (int));
+
+    double* affin = (double*) vrna_alloc((length + 1) * sizeof (double));
+
+    double* distances = (double*) vrna_alloc((length + 1) * sizeof (double));
+    for (int k = 0; k <= length; k++) {
+        distances[k] = puzzler->unpaired;
+    }
+    structure* structures = vrna_alloc((length + 1) * sizeof *structures);
+    for (int i = 0; i <= length; i++) {
+        structures[i].config = NULL;
+    }
+
+    // generate default config for each loop
+    cfgGenerateConfig(pair_table, structures, puzzler->unpaired, puzzler->paired);
+
+    if (printInitialConfig) {
+        printf("** print initial config **\n");
+        for (int i = 0; i <= length; i++) {
+            if (structures[i].config != NULL) {
+                cfgPrintConfig(structures[i].config);
+            }
+        }
+    }
+
+    f_get_angles(pair_table, puzzler->paired, puzzler->unpaired, directions, affin, distances, structures);
+    f_refill_coords(myX, myY, length, affin, distances);
+
+    double distBulge = sqrt(puzzler->unpaired * puzzler->unpaired - 0.25 * puzzler->unpaired * puzzler->unpaired);
+    treeNode* tree = buildConfigtree(pair_table, structures, myX, myY, distBulge);
+
+    /// current and maximal number of changes applied to config
+    puzzler->numberOfChangesAppliedToConfig = 0;
+
+    /// DZ: should be dependent on the RNA length * 10 ???
+    puzzler->maximumNumberOfConfigChangesAllowed = 25000;
+
+    // reset drawing
+    for (int i = 0; i < length+1; i++) {
+        directions[i] = 1;
+        distances[i] = puzzler->unpaired;
+        affin[i] = 0;
+    }
+
+    if (puzzler->checkExteriorIntersections || puzzler->checkSiblingIntersections || puzzler->checkAncestorIntersections) {
+        /// One execution of checkAndFixIntersections should always be sufficient
+        updateBoundingBoxes(tree, puzzler);
+
+        if (FANCY_PS) {
+            PS_printFancyTree(tree, puzzler);
+        }
+        checkAndFixIntersections(tree, 0, puzzler);
+        printf("\n");
+        printInformation("CHANGE COUNT", "%d %s\n\n", puzzler->numberOfChangesAppliedToConfig, puzzler->filename);
+    }
+
+    // redraw RNA with new config
+    f_get_angles(pair_table, puzzler->paired, puzzler->unpaired, directions, affin, distances, structures);
+    f_refill_coords(myX, myY, length, affin, distances);
+
+    /// this section is for finding and resolving intersections
+    /// of branches of the exterior loop against each other
+    /// stretch backbones of the exterior until the overlap is gone
+    /// may result in wide pictures
+    short checkIntersectionsOfExteriorBranches = 1;
+    if (checkIntersectionsOfExteriorBranches) {
+        //stretchExteriorLoop(tree, pair_table, distances, puzzler->unpaired);
+        optimizeExterior(tree, pair_table, distances, affin, puzzler->unpaired, puzzler->checkExteriorIntersections);
+        f_refill_coords(myX, myY, length, affin, distances);
+
+        if (FANCY_PS) {
+
+            if (tree->lBox) {
+                free(tree->lBox);
+                tree->lBox = NULL;
+            }
+            if (tree->sBox) {
+                free(tree->sBox);
+                tree->sBox = NULL;
+            }
+            PS_printFancyTree(tree, puzzler);
+        }
+    }
+
+    // Now we are done without optimizations! :)
+
+    if (puzzler->drawArcs) {
+        computeAnglesAndCentersForPS(pair_table, myX, myY, structures, arc_coords);
+    }
+
+    /// final check based on line segments and arc segments
+    short printDetails = 0;
+    short intersect = checkRemainingIntersections(myX, myY, arc_coords, printDetails, structures, length);
+    //  printInformation("RESULT FINAL", "%s %s\n\n", (intersect ? "FAIL   " : "SUCCESS"), puzzler->filename);
+
+    freeTree(tree);
+//    printf("tree\n");
+    free(distances);
+//    printf("distances\n");
+    free(structures);
+//    printf("structures\n");
+    free(directions);
+//    printf("directions\n");
+    free(affin);
+//    printf("affin\n");
+
+    for (int i = 0; i < length; i++) {
+        x[i] = myX[i];
+        y[i] = myY[i];
+    }
+
+    free(myX);
+    free(myY);
+
+    return length;
+}
+

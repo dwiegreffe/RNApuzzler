@@ -1,0 +1,46 @@
+RNApuzzler v1.0
+
+Motivation: RNA secondary structure has emerged as most useful representation for
+studying the function of RNA.  It captures the dominating of the free
+energy of RNA folding.  Using empirically determined energy parameters,
+these secondary structures of nucleic acids can be efficiently computed by
+recursive algorithms.  Several software packages supporting this task are
+readily available. As RNA secondary structures are outerplanar graphs, they
+can be drawn without intersection in the plane.  Interpretation by the
+practitioner is eased, when these drawings conform to a series of
+constraints that include outerplanarity. These constraints are the reason
+why RNA drawing is difficult. Many RNA drawing algorithms do not always
+produce intersection-free (outerplanar) drawings.
+Results: To remedy this shortcoming, we propose here the RNApuzzler algorithm, which is guaranteed
+to produce intersection-free drawings. It is based on a drawing algorithm
+respecting constraints based on nucleotide distances (RNAturtle).  We
+investigate relaxations of these constraints allowing for intersection-free
+drawings.  Based on these relaxations we implemented a fully automated,
+simple, and robust algorithm that produces aesthetic drawings adhering to
+previously established guidelines.  We tested our algorithm using the RFAM
+database and found that we can compute intersection-free drawings of all
+RNAs therein efficiently.
+
+
+
+RNApuzzler is implemented within the ViennaRNA Package v2.35. Therefore, it will be built during the ViennaRNA build process. The following steps must be performed under Linux to create a binary of RNApuzzler:
+
+./autogen.sh
+automac
+./configure --without-perl --without-python --without-doc --without-forester --without-kinfold --without-kinwalker
+make
+make install
+
+ViennaRNA v2.35 is now globally installed on the system. If you want to build under MacOS, please note further information in the file INSTALL.
+
+
+
+The following commands are used to create drawings with RNApuzzler or RNAturtle:
+
+cat folded-rna-seq.txt | RNAplot -t 4 <- RNAplot draws with the RNApuzzler algorithm
+cat folded-rna-seq.txt | RNAplot -t 3 <- RNAplot draws with the RNAturtle algorithm
+
+Further layout parameters can be accessed with:
+
+RNAplot -h 
+
