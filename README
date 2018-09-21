@@ -26,9 +26,11 @@ RNAs therein efficiently.
 RNApuzzler is implemented within the ViennaRNA Package v2.35. Therefore, it will be built during the ViennaRNA build process. The following steps must be performed under Linux to create a binary of RNApuzzler:
 
 ./autogen.sh
-automac
+
 ./configure --without-perl --without-python --without-doc --without-forester --without-kinfold --without-kinwalker
+
 make
+
 make install
 
 ViennaRNA v2.35 is now globally installed on the system. If you want to build under MacOS, please note further information in the file INSTALL.
